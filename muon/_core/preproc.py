@@ -2,6 +2,9 @@ from typing import Union, Callable, Optional, Sequence, Dict, Iterable, Literal
 from functools import reduce
 import warnings
 from itertools import repeat
+import multiprocessing
+import threading
+
 
 import numpy as np
 from scipy.sparse import (
@@ -37,9 +40,25 @@ from mudata import MuData
 
 # Computational methods for preprocessing
 
-_euclidean = njit(euclidean.py_func, inline="always", fastmath=True)
-_sparse_euclidean = njit(sparse_euclidean.py_func, inline="always")
-_sparse_jaccard = njit(sparse_jaccard.py_func, inline="always")
+# Shared dictionary to store compiled functions, managed by multiprocessing.Manager
+manager = multiprocessing.Manager()
+_compiled_functions = manager.dict()
+
+# Locks for thread and process safety
+_thread_lock = threading.Lock()
+_process_lock = multiprocessing.Lock()
+
+def get_compiled_function(name):
+    with _process_lock:  # Ensures that only one process can enter this block at a time
+        if name not in _compiled_functions:
+            with _thread_lock:  # Ensures that only one thread in this process can compile at a time
+                if name == "euclidean":
+                    _compiled_functions[name] = njit(euclidean.py_func, inline="always", fastmath=True)
+                elif name == "sparse_euclidean":
+                    _compiled_functions[name] = njit(sparse_euclidean.py_func, inline="always")
+                elif name == "sparse_jaccard":
+                    _compiled_functions[name] = njit(sparse_jaccard.py_func, inline="always")
+    return _compiled_functions[name]
 
 
 @njit
@@ -53,6 +72,10 @@ def _jaccard_euclidean_metric(
     N: int,
     bbox_norm: float,
 ):
+    # Fetch compiled functions
+    _euclidean = get_compiled_function("euclidean")
+    _sparse_jaccard = get_compiled_function("sparse_jaccard")
+
     x = int(x[0])  # this is for compatibility with pynndescent
     y = int(y[0])  # pynndescent converts the data to float32
     if x == y:
@@ -83,6 +106,10 @@ def _jaccard_sparse_euclidean_metric(
     N: int,
     bbox_norm: float,
 ):
+    # Fetch compiled functions
+    _sparse_euclidean = get_compiled_function("sparse_euclidean")
+    _sparse_jaccard = get_compiled_function("sparse_jaccard")
+
     x = int(x[0])  # this is for compatibility with pynndescent
     y = int(y[0])  # pynndescent converts the data to float32
     if x == y:
